@@ -5,19 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>AI旅のおとも ver2</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <meta name="color-scheme" content="dark light">
   <style>
     :root { --safe-top: env(safe-area-inset-top); --safe-bottom: env(safe-area-inset-bottom); }
     html, body { background: #0a0a0a; }
-    /* 動画を全面にフィット */
     #preview { width:100vw; height:100dvh; object-fit:cover; background:black; }
-    /* フェードアウトして消えるメッセージ */
     @keyframes fadeAway { 0%{opacity:1} 70%{opacity:.3} 100%{opacity:0} }
     .fade-out { animation: fadeAway 3.6s ease forwards; }
-    /* ボトムシートのトランジション */
     .sheet { transition: transform .26s ease, opacity .26s ease }
-    /* iOS長押しハイライト抑止 */
     * { -webkit-tap-highlight-color: transparent; }
+
+    /* モード切替ピル */
+    .mode-pill { backdrop-filter: blur(12px); }
+    .mode-btn { transition: all .2s ease; }
+    .mode-btn.active-chat { background: #f59e0b; color: #000; }
+    .mode-btn.active-scan { background: #06b6d4; color: #000; }
+
+    /* レアリティカラー */
+    .rarity-コモン { border-color: #a1a1aa; }
+    .rarity-レア { border-color: #3b82f6; }
+    .rarity-スーパーレア { border-color: #a855f7; }
+    .rarity-レジェンド { border-color: #eab308; box-shadow: 0 0 12px rgba(234,179,8,0.3); }
+
+    /* スキャンアニメーション */
+    @keyframes scanLine { 0%{top:0} 100%{top:100%} }
+    .scan-line {
+      position: absolute; left: 10%; right: 10%; height: 2px;
+      background: linear-gradient(90deg, transparent, #06b6d4, transparent);
+      animation: scanLine 1.5s ease-in-out infinite;
+      box-shadow: 0 0 8px #06b6d4;
+    }
+
+    /* コレクション画面 */
+    .collection-overlay { transition: transform .3s ease, opacity .3s ease; }
+    .collection-card { transition: transform .15s ease; }
+    .collection-card:active { transform: scale(0.96); }
+
+    /* 3Dビューア */
+    model-viewer { width: 100%; height: 300px; --poster-color: transparent; }
   </style>
 </head>
 <body class="h-full text-zinc-100">
@@ -34,6 +60,13 @@
           <span id="status-led" class="inline-block w-2.5 h-2.5 rounded-full bg-zinc-500"></span>
           <span id="status-text" class="text-sm text-zinc-200">待機中</span>
         </div>
+
+        <!-- モード切替ピル -->
+        <div class="pointer-events-auto mode-pill inline-flex items-center gap-0.5 p-0.5 rounded-full bg-black/50 ring-1 ring-white/10">
+          <button id="mode-chat" class="mode-btn active-chat px-3 py-1 text-xs font-bold rounded-full">おしゃべり</button>
+          <button id="mode-scan" class="mode-btn px-3 py-1 text-xs font-bold rounded-full text-zinc-400">スキャン</button>
+        </div>
+
         <div class="ml-auto flex items-center gap-2">
           <span id="badge-live" class="hidden pointer-events-auto px-2 py-1 text-xs rounded-md bg-red-600/80">LIVE</span>
           <span id="badge-rec" class="hidden pointer-events-auto px-2 py-1 text-xs rounded-md bg-red-600/80">REC</span>
@@ -47,16 +80,26 @@
 
       <!-- Bottom controls -->
       <div class="grid grid-cols-3 items-end gap-3 pb-[calc(8px+var(--safe-bottom))]">
-        <div class="flex items-center">
+        <div class="flex items-center gap-2">
           <button id="btn-switch" class="pointer-events-auto ml-1 inline-flex items-center justify-center w-12 h-12 rounded-full bg-black/40 ring-1 ring-white/10 backdrop-blur hover:bg-black/55" aria-label="カメラ切替">🔄</button>
         </div>
         <div class="flex items-center justify-center">
           <button id="btn-shutter" class="pointer-events-auto relative w-20 h-20 rounded-full bg-amber-500 shadow-[0_0_0_6px_rgba(255,255,255,0.18)] active:scale-95 transition" aria-label="撮影/送信">
-            <span class="absolute inset-1 rounded-full bg-amber-600/70"></span>
+            <span id="shutter-inner" class="absolute inset-1 rounded-full bg-amber-600/70"></span>
           </button>
         </div>
-        <div class="flex items-center justify-end">
+        <div class="flex items-center justify-end gap-2">
+          <button id="btn-collection" class="pointer-events-auto inline-flex items-center justify-center w-12 h-12 rounded-full bg-black/40 ring-1 ring-white/10 backdrop-blur hover:bg-black/55" aria-label="コレクション">
+            <span class="text-lg">🎒</span>
+          </button>
           <button id="btn-more" class="pointer-events-auto mr-1 inline-flex items-center justify-center w-12 h-12 rounded-full bg-black/40 ring-1 ring-white/10 backdrop-blur" aria-label="その他">⋯</button>
+        </div>
+      </div>
+
+      <!-- スキャンモードのオーバーレイ -->
+      <div id="scan-overlay" class="hidden absolute inset-0 pointer-events-none z-15">
+        <div class="absolute inset-[10%] border-2 border-cyan-400/40 rounded-2xl">
+          <div class="scan-line"></div>
         </div>
       </div>
     </div>
@@ -100,6 +143,50 @@
 
     <!-- Hidden canvas -->
     <canvas id="canvas" class="hidden"></canvas>
+
+    <!-- コレクション画面 -->
+    <div id="collection-overlay" class="collection-overlay fixed inset-0 z-40 bg-zinc-950 translate-y-full opacity-0 overflow-y-auto">
+      <div class="max-w-screen-sm mx-auto p-4 pt-[calc(12px+var(--safe-top))] pb-[calc(24px+var(--safe-bottom))]">
+        <!-- ヘッダー -->
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold">🎒 コレクション</h2>
+          <button id="btn-close-collection" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm">閉じる</button>
+        </div>
+        <div id="collection-stats" class="text-xs text-zinc-500 mb-4"></div>
+
+        <!-- コレクショングリッド -->
+        <div id="collection-grid" class="grid grid-cols-2 gap-3">
+          <!-- 動的に追加 -->
+        </div>
+
+        <!-- 空の状態 -->
+        <div id="collection-empty" class="text-center py-16 text-zinc-500">
+          <div class="text-5xl mb-3">📷</div>
+          <div class="text-sm">スキャンモードで撮影して<br>コレクションを始めよう！</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- アイテム詳細ビュー -->
+    <div id="item-detail" class="collection-overlay fixed inset-0 z-50 bg-zinc-950 translate-y-full opacity-0 overflow-y-auto">
+      <div class="max-w-screen-sm mx-auto p-4 pt-[calc(12px+var(--safe-top))] pb-[calc(24px+var(--safe-bottom))]">
+        <div class="flex items-center justify-between mb-4">
+          <button id="btn-back-collection" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm">← 戻る</button>
+        </div>
+        <div id="item-detail-content">
+          <!-- 動的に追加 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- スキャン結果カード（スキャン成功時に一時表示） -->
+    <div id="scan-result" class="fixed inset-x-0 bottom-0 z-35 translate-y-full transition-transform duration-300">
+      <div class="mx-auto max-w-screen-sm p-4 pb-[calc(16px+var(--safe-bottom))]">
+        <div id="scan-result-card" class="rounded-2xl bg-zinc-900/95 ring-1 ring-white/10 backdrop-blur p-4 shadow-2xl">
+          <!-- 動的に追加 -->
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- ===== UI wiring ===== -->
@@ -233,6 +320,82 @@
       unlockSpeechOnce();
       addChat('テスト：この音声は聞こえますか？', 'bot');
     });
+
+    // ===== モード切替 =====
+    let currentMode = 'chat'; // 'chat' | 'scan'
+    window.currentMode = currentMode;
+
+    const modeChat = $('mode-chat');
+    const modeScan = $('mode-scan');
+    const btnShutter = $('btn-shutter');
+    const shutterInner = $('shutter-inner');
+    const scanOverlay = $('scan-overlay');
+
+    function setMode(mode) {
+      currentMode = mode;
+      window.currentMode = mode;
+
+      if (mode === 'chat') {
+        modeChat.className = 'mode-btn active-chat px-3 py-1 text-xs font-bold rounded-full';
+        modeScan.className = 'mode-btn px-3 py-1 text-xs font-bold rounded-full text-zinc-400';
+        btnShutter.className = 'pointer-events-auto relative w-20 h-20 rounded-full bg-amber-500 shadow-[0_0_0_6px_rgba(255,255,255,0.18)] active:scale-95 transition';
+        shutterInner.className = 'absolute inset-1 rounded-full bg-amber-600/70';
+        scanOverlay?.classList.add('hidden');
+        chat.style.display = '';
+      } else {
+        modeScan.className = 'mode-btn active-scan px-3 py-1 text-xs font-bold rounded-full';
+        modeChat.className = 'mode-btn px-3 py-1 text-xs font-bold rounded-full text-zinc-400';
+        btnShutter.className = 'pointer-events-auto relative w-20 h-20 rounded-full bg-cyan-500 shadow-[0_0_0_6px_rgba(255,255,255,0.18)] active:scale-95 transition';
+        shutterInner.className = 'absolute inset-1 rounded-full bg-cyan-600/70';
+        scanOverlay?.classList.remove('hidden');
+        chat.style.display = 'none';
+      }
+
+      console.log(`🔀 モード切替: ${mode}`);
+    }
+
+    modeChat.addEventListener('click', () => setMode('chat'));
+    modeScan.addEventListener('click', () => setMode('scan'));
+
+    // ===== コレクションUI =====
+    const collectionOverlay = $('collection-overlay');
+    const itemDetail = $('item-detail');
+    const scanResult = $('scan-result');
+
+    function openCollection() {
+      collectionOverlay.style.transform = 'translateY(0)';
+      collectionOverlay.style.opacity = '1';
+      toggleChrome(false);
+      if (window.loadCollection) window.loadCollection();
+    }
+    function closeCollection() {
+      collectionOverlay.style.transform = 'translateY(100%)';
+      collectionOverlay.style.opacity = '0';
+      toggleChrome(true);
+    }
+    function openItemDetail() {
+      itemDetail.style.transform = 'translateY(0)';
+      itemDetail.style.opacity = '1';
+    }
+    function closeItemDetail() {
+      itemDetail.style.transform = 'translateY(100%)';
+      itemDetail.style.opacity = '0';
+    }
+    function showScanResult(html) {
+      $('scan-result-card').innerHTML = html;
+      scanResult.style.transform = 'translateY(0)';
+      setTimeout(() => { scanResult.style.transform = 'translateY(100%)'; }, 5000);
+    }
+
+    window.openCollection = openCollection;
+    window.closeCollection = closeCollection;
+    window.openItemDetail = openItemDetail;
+    window.closeItemDetail = closeItemDetail;
+    window.showScanResult = showScanResult;
+
+    $('btn-collection')?.addEventListener('click', openCollection);
+    $('btn-close-collection')?.addEventListener('click', closeCollection);
+    $('btn-back-collection')?.addEventListener('click', closeItemDetail);
 
     // 初期状態でボタンを押せるように（pointer-events を有効化）
     toggleChrome(true);

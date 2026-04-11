@@ -1,5 +1,5 @@
 // api/reset-session.js - セッションリセットAPI
-import { sessions } from '../sessions/store.js';
+import { resetSession } from '../sessions/store.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -15,13 +15,10 @@ export default async function handler(req, res) {
 
     console.log(`🗑️ [Reset] セッションをリセット: ${sessionId}`);
 
-    // セッションデータを完全削除
-    if (sessions[sessionId]) {
-      delete sessions[sessionId];
-      console.log(`✅ [Reset] セッション ${sessionId} を削除しました`);
-    } else {
-      console.log(`⚠️ [Reset] セッション ${sessionId} は存在しませんでした`);
-    }
+    const removed = resetSession(sessionId);
+    console.log(removed
+      ? `✅ [Reset] セッション ${sessionId} を削除しました`
+      : `⚠️ [Reset] セッション ${sessionId} は存在しませんでした`);
 
     res.json({
       success: true,

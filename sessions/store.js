@@ -1,51 +1,147 @@
-// ── 超シンプルなメモリストア ──
-//  later: Redis 等に差し替えても API はそのまま
+// sessions/store.js
+// 会話履歴・撮影画像はインメモリ（揮発OK、Vercelでも各リクエスト内で完結）
+// コレクションは Supabase Postgres + Storage で永続化
 
-const MAX_TURNS = 5;          // ← ここを変えれば保持長を調整
-export const sessions = {};   // { id: { history: [], images: [], descriptions: [] } }
+import { supabase } from '../lib/supabase.js';
 
-/* 取得 */
-export const getHistory = (id) =>
-  sessions[id]?.history ?? [];
+const MAX_TURNS = 5;
+const sessions = {};
 
-/* 画像取得 */
+function ensureSession(id) {
+  return sessions[id] ||= { history: [], images: [], descriptions: [] };
+}
+
+/* ── 会話履歴・画像（揮発） ── */
+
+export const getHistory = (id) => sessions[id]?.history ?? [];
+
 export const getLatestImage = (id) => {
   const images = sessions[id]?.images ?? [];
   return images.length > 0 ? images[images.length - 1] : null;
 };
 
-/* 説明取得 */
-export const getDescriptions = (id) =>
-  sessions[id]?.descriptions ?? [];
+export const getDescriptions = (id) => sessions[id]?.descriptions ?? [];
 
-/* 履歴追加＆古いメッセージ自動削除 */
 export const pushHistory = (id, msg) => {
-  const s = sessions[id] ||= { history: [], images: [], descriptions: [] };
+  const s = ensureSession(id);
   s.history.push(msg);
-  // user + assistant で 1 ターンと数えて制限
   while (s.history.length > MAX_TURNS * 2) s.history.shift();
 };
 
-/* 画像と説明を追加（デバッグ版） */
-export const addImageAndDescription = (id, image, description) => {
-  console.log(`📝 [Store] addImageAndDescription called for session: ${id}`);
-  
-  const s = sessions[id] ||= { history: [], images: [], descriptions: [] };
-  
-  if (Object.keys(sessions).length === 1 && sessions[id]) {
-    console.log(`🆕 [Store] 新しいセッション作成: ${id}`);
+export const resetSession = (id) => {
+  if (sessions[id]) {
+    delete sessions[id];
+    return true;
   }
-  
-  s.images.push({
-    data: image,                              
-    timestamp: new Date().toISOString()       
-  });
-  
-  s.descriptions.push(description);    
-  
-  // 古い画像を削除（メモリ節約のため最新5枚まで保持）
-  while (s.images.length > 5) s.images.shift();           
-  while (s.descriptions.length > 5) s.descriptions.shift(); 
-  
-  console.log(`✅ [Store] セッション保存完了. 画像数: ${s.images.length}, 説明数: ${s.descriptions.length}`);
+  return false;
+};
+
+export const addImageAndDescription = (id, image, description) => {
+  const s = ensureSession(id);
+  s.images.push({ data: image, timestamp: new Date().toISOString() });
+  s.descriptions.push(description);
+  while (s.images.length > 5) s.images.shift();
+  while (s.descriptions.length > 5) s.descriptions.shift();
+  console.log(`✅ [Store] 履歴保存. 画像数: ${s.images.length}`);
+};
+
+/* ── コレクション（Supabase永続化） ── */
+
+// DB行を旧来のitem形状に変換（呼び出し側の互換維持）
+function rowToItem(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    category: row.category || 'その他',
+    description: row.description,
+    rarity: row.rarity,
+    image: row.image_url,
+    model3d: {
+      status: row.glb_status || 'none',
+      taskId: row.tripo_task_id || null,
+      glbUrl: row.glb_url || null
+    },
+    createdAt: row.created_at
+  };
+}
+
+export const getCollection = async (sessionId) => {
+  const { data, error } = await supabase
+    .from('collections')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('❌ [Store] getCollection error:', error);
+    return [];
+  }
+  return (data || []).map(rowToItem);
+};
+
+export const addToCollection = async (sessionId, item) => {
+  const insertRow = {
+    session_id: sessionId,
+    name: item.name,
+    category: item.category || 'その他',
+    description: item.description,
+    rarity: item.rarity || 'コモン',
+    image_url: item.image_url || null,
+    glb_status: 'none'
+  };
+
+  const { data, error } = await supabase
+    .from('collections')
+    .insert(insertRow)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('❌ [Store] addToCollection error:', error);
+    throw error;
+  }
+  console.log(`🎒 [Store] コレクション追加: ${data.name} (${data.id})`);
+  return rowToItem(data);
+};
+
+export const getCollectionItem = async (sessionId, itemId) => {
+  const { data, error } = await supabase
+    .from('collections')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('id', itemId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('❌ [Store] getCollectionItem error:', error);
+    return null;
+  }
+  return rowToItem(data);
+};
+
+export const updateCollectionItem = async (sessionId, itemId, updates) => {
+  // 旧API互換: { model3d: { status, taskId, glbUrl } } を受け取る
+  const dbUpdates = {};
+  if (updates.model3d) {
+    if (updates.model3d.status !== undefined) dbUpdates.glb_status = updates.model3d.status;
+    if (updates.model3d.taskId !== undefined) dbUpdates.tripo_task_id = updates.model3d.taskId;
+    if (updates.model3d.glbUrl !== undefined) dbUpdates.glb_url = updates.model3d.glbUrl;
+  }
+  if (updates.image_url !== undefined) dbUpdates.image_url = updates.image_url;
+
+  const { data, error } = await supabase
+    .from('collections')
+    .update(dbUpdates)
+    .eq('session_id', sessionId)
+    .eq('id', itemId)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    console.error('❌ [Store] updateCollectionItem error:', error);
+    return null;
+  }
+  console.log(`🔄 [Store] コレクション更新: ${itemId}`);
+  return rowToItem(data);
 };

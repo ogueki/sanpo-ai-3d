@@ -24,6 +24,8 @@ console.log('📱 Session ID:', SESSION_ID);
 const API_URL_UNIFIED = '/api/unified';
 const API_URL_RESET = '/api/reset-session';
 const API_URL_STT = '/api/speech-to-text';
+const API_URL_COLLECTION = '/api/collection';
+const API_URL_GENERATE_3D = '/api/generate-3d';
 
 // 要素の安全な取得
 const getElement = (id) => {
@@ -646,7 +648,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnShutter) {
     // モバイル対策: touchstart時にAudioをプリウォーム
     btnShutter.addEventListener('touchstart', prewarmAudio, { passive: true });
-    btnShutter.addEventListener('click', () => captureAndSendToAI());
+    btnShutter.addEventListener('click', () => {
+      if (window.currentMode === 'scan') {
+        scanAndCollect();
+      } else {
+        captureAndSendToAI();
+      }
+    });
   }
   if (btnSwitch) btnSwitch.addEventListener('click', flipCamera);
   if (btnSendText) btnSendText.addEventListener('click', sendText);
@@ -691,6 +699,337 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => startCamera(true), 500);
 });
 
+/* ---------- スキャンモード & コレクション ---------- */
+let scanProcessing = false;
+
+async function scanAndCollect() {
+  if (scanProcessing) {
+    showToast('スキャン中です...');
+    return;
+  }
+
+  if (!video || !video.srcObject || !video.videoWidth) {
+    showToast('カメラを起動しています...');
+    const success = await startCamera(useBack);
+    if (!success) return;
+    setTimeout(() => scanAndCollect(), 1000);
+    return;
+  }
+
+  try {
+    scanProcessing = true;
+
+    if (!canvas) throw new Error('canvas要素が見つかりません');
+
+    // 画像をキャプチャ
+    const SCALE = 0.7;
+    canvas.width = video.videoWidth * SCALE;
+    canvas.height = video.videoHeight * SCALE;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    if (!blob) throw new Error('画像の生成に失敗しました');
+
+    const base64Image = await blobToBase64(blob);
+
+    // フラッシュ効果
+    showFlash();
+    updateStatus('スキャン中...', true);
+    showToast('🔍 対象を分析中...');
+
+    // コレクションAPIに送信
+    const response = await fetch(API_URL_COLLECTION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: SESSION_ID,
+        image: base64Image
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const item = data.item;
+
+    console.log(`✅ スキャン成功: ${item.name} (${item.rarity})`);
+    updateStatus('スキャン完了!', true);
+
+    // レアリティに応じたエフェクト
+    const rarityEmoji = {
+      'コモン': '⬜',
+      'レア': '🔵',
+      'スーパーレア': '🟣',
+      'レジェンド': '🌟'
+    };
+
+    // スキャン結果カードを表示
+    if (window.showScanResult) {
+      window.showScanResult(`
+        <div class="flex items-start gap-3">
+          <div class="text-3xl">${rarityEmoji[item.rarity] || '⬜'}</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="font-bold text-lg">${item.name}</span>
+              <span class="text-xs px-1.5 py-0.5 rounded-full ring-1 ring-white/20 ${
+                item.rarity === 'レジェンド' ? 'bg-yellow-500/20 text-yellow-300' :
+                item.rarity === 'スーパーレア' ? 'bg-purple-500/20 text-purple-300' :
+                item.rarity === 'レア' ? 'bg-blue-500/20 text-blue-300' :
+                'bg-zinc-500/20 text-zinc-300'
+              }">${item.rarity}</span>
+            </div>
+            <div class="text-sm text-zinc-400 mb-2">${item.category}</div>
+            <div class="text-sm text-zinc-300">${item.description}</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs text-zinc-500 text-center">コレクションに追加しました！</div>
+      `);
+    }
+
+    // TTS で名前を読み上げ
+    const audio = await prepareAudio(`${item.name}を発見しました！${item.rarity}です！`);
+    if (audio) {
+      try { await audio.play(); } catch (e) { speakFallback(`${item.name}を発見！`); }
+    }
+
+    // 3D生成を裏で開始（APIキーがあれば）
+    start3DGeneration(item.id);
+
+  } catch (error) {
+    console.error('❌ スキャンエラー:', error);
+    showToast('スキャンに失敗しました');
+    updateStatus('エラー', false);
+  } finally {
+    scanProcessing = false;
+  }
+}
+
+// 3D生成をバックグラウンドで開始
+async function start3DGeneration(itemId) {
+  try {
+    const response = await fetch(API_URL_GENERATE_3D, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: SESSION_ID,
+        itemId,
+        action: 'generate'
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.status === 'unavailable') {
+      console.log('ℹ️ 3D生成: APIキー未設定');
+      return;
+    }
+
+    if (data.status === 'processing') {
+      console.log(`🎨 3D生成開始: taskId=${data.taskId}`);
+      // ポーリングで状態を確認
+      poll3DStatus(itemId);
+    }
+  } catch (error) {
+    console.warn('3D生成の開始に失敗:', error.message);
+  }
+}
+
+// 3D生成の状態をポーリング
+async function poll3DStatus(itemId) {
+  const maxAttempts = 60; // 最大5分（5秒×60回）
+  let attempts = 0;
+
+  const check = async () => {
+    if (attempts++ >= maxAttempts) {
+      console.warn('3D生成: タイムアウト');
+      return;
+    }
+
+    try {
+      const response = await fetch(API_URL_GENERATE_3D, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: SESSION_ID,
+          itemId,
+          action: 'status'
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.status === 'completed') {
+        console.log('✅ 3D生成完了!');
+        showToast('3Dモデルが完成しました！');
+        return;
+      }
+
+      if (data.status === 'failed') {
+        console.warn('3D生成失敗');
+        return;
+      }
+
+      // まだ処理中 → 5秒後に再チェック
+      setTimeout(check, 5000);
+    } catch {
+      setTimeout(check, 10000);
+    }
+  };
+
+  // 10秒後から開始
+  setTimeout(check, 10000);
+}
+
+// コレクション読み込み・表示
+async function loadCollection() {
+  const grid = document.getElementById('collection-grid');
+  const empty = document.getElementById('collection-empty');
+  const stats = document.getElementById('collection-stats');
+  if (!grid) return;
+
+  try {
+    const response = await fetch(`${API_URL_COLLECTION}?sessionId=${SESSION_ID}`);
+    const data = await response.json();
+    const items = data.collection || [];
+
+    if (items.length === 0) {
+      grid.innerHTML = '';
+      empty.style.display = '';
+      stats.textContent = '';
+      return;
+    }
+
+    empty.style.display = 'none';
+    stats.textContent = `${items.length} アイテム収集済み`;
+
+    grid.innerHTML = items.map(item => {
+      const has3D = item.model3d?.status === 'completed' && item.model3d?.glbUrl;
+      const isProcessing = item.model3d?.status === 'processing';
+      const slotInner = has3D
+        ? `<model-viewer src="${item.model3d.glbUrl}"
+              auto-rotate rotation-per-second="30deg" interaction-prompt="none"
+              disable-zoom disable-pan disable-tap
+              shadow-intensity="0" exposure="1.1"
+              style="width:100%;height:100%;background:transparent;"></model-viewer>`
+        : isProcessing
+          ? `<div class="flex flex-col items-center justify-center text-yellow-400">
+               <div class="text-3xl animate-spin">⏳</div>
+               <div class="text-[10px] mt-1">生成中</div>
+             </div>`
+          : `<div class="text-4xl opacity-60">📦</div>`;
+      return `
+      <div class="collection-card rounded-xl bg-zinc-900 ring-1 ring-white/10 overflow-hidden cursor-pointer rarity-${item.rarity || 'コモン'} border-2 border-transparent"
+           onclick="showItemDetail('${item.id}')"
+           style="${item.rarity === 'レジェンド' ? 'border-color: #eab308; box-shadow: 0 0 12px rgba(234,179,8,0.3);' :
+                    item.rarity === 'スーパーレア' ? 'border-color: #a855f7;' :
+                    item.rarity === 'レア' ? 'border-color: #3b82f6;' : 'border-color: #3f3f46;'}">
+        <div class="aspect-square relative flex items-center justify-center overflow-hidden"
+             style="background: radial-gradient(circle at 50% 40%, #3f3f46 0%, #18181b 70%);">
+          ${slotInner}
+        </div>
+        <div class="p-2">
+          <div class="text-sm font-bold truncate">${item.name}</div>
+          <div class="flex items-center justify-between mt-1">
+            <span class="text-xs text-zinc-500">${item.category || ''}</span>
+            <span class="text-xs ${
+              item.rarity === 'レジェンド' ? 'text-yellow-400' :
+              item.rarity === 'スーパーレア' ? 'text-purple-400' :
+              item.rarity === 'レア' ? 'text-blue-400' :
+              'text-zinc-500'
+            }">${item.rarity || ''}</span>
+          </div>
+        </div>
+      </div>
+    `;}).join('');
+  } catch (error) {
+    console.error('コレクション読み込みエラー:', error);
+    grid.innerHTML = '<div class="col-span-2 text-center text-zinc-500 py-8">読み込みに失敗しました</div>';
+  }
+}
+
+// アイテム詳細表示
+async function showItemDetail(itemId) {
+  const content = document.getElementById('item-detail-content');
+  if (!content) return;
+
+  content.innerHTML = '<div class="text-center py-8 text-zinc-500">読み込み中...</div>';
+  if (window.openItemDetail) window.openItemDetail();
+
+  try {
+    const response = await fetch(API_URL_COLLECTION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: SESSION_ID,
+        action: 'get',
+        itemId
+      })
+    });
+
+    const data = await response.json();
+    const item = data.item;
+
+    if (!item) {
+      content.innerHTML = '<div class="text-center py-8 text-zinc-500">アイテムが見つかりません</div>';
+      return;
+    }
+
+    const rarityColor = {
+      'コモン': 'text-zinc-400 bg-zinc-800',
+      'レア': 'text-blue-400 bg-blue-900/30',
+      'スーパーレア': 'text-purple-400 bg-purple-900/30',
+      'レジェンド': 'text-yellow-400 bg-yellow-900/30'
+    };
+
+    content.innerHTML = `
+      <!-- 画像 -->
+      <div class="rounded-xl overflow-hidden mb-4 ring-1 ring-white/10">
+        ${item.image ? `<img src="${item.image}" class="w-full" alt="${item.name}">` : ''}
+      </div>
+
+      <!-- 名前 & レアリティ -->
+      <div class="flex items-center gap-3 mb-3">
+        <h3 class="text-2xl font-bold flex-1">${item.name}</h3>
+        <span class="px-2 py-1 rounded-lg text-xs font-bold ${rarityColor[item.rarity] || rarityColor['コモン']}">${item.rarity}</span>
+      </div>
+
+      <!-- カテゴリ -->
+      <div class="text-sm text-zinc-500 mb-3">${item.category || 'その他'}</div>
+
+      <!-- 説明 -->
+      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
+        <div class="text-sm text-zinc-300 leading-relaxed">${item.description}</div>
+      </div>
+
+      <!-- 3Dモデル -->
+      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
+        <div class="text-sm text-zinc-400 mb-2">🧊 3Dモデル</div>
+        ${item.model3d?.status === 'completed' && item.model3d?.glbUrl
+          ? `<model-viewer src="${item.model3d.glbUrl}" auto-rotate camera-controls
+               touch-action="pan-y" shadow-intensity="1"
+               style="width:100%;height:300px;background:#18181b;border-radius:12px;">
+             </model-viewer>`
+          : item.model3d?.status === 'processing'
+            ? '<div class="text-center py-8 text-yellow-400">⏳ 3Dモデル生成中...</div>'
+            : '<div class="text-center py-8 text-zinc-600">3Dモデルは未生成です</div>'
+        }
+      </div>
+
+      <!-- メタ情報 -->
+      <div class="text-xs text-zinc-600">
+        取得日時: ${new Date(item.createdAt).toLocaleString('ja-JP')}
+      </div>
+    `;
+  } catch (error) {
+    console.error('アイテム詳細エラー:', error);
+    content.innerHTML = '<div class="text-center py-8 text-zinc-500">読み込みに失敗しました</div>';
+  }
+}
+
 /* ---------- グローバル公開 ---------- */
 window.startCamera = startCamera;
 window.captureAndSendToAI = captureAndSendToAI;
@@ -699,4 +1038,7 @@ window.sendText = sendText;
 window.quickQuestion = quickQuestion;
 window.updateStatus = updateStatus;
 window.resetSession = resetSession;
+window.scanAndCollect = scanAndCollect;
+window.loadCollection = loadCollection;
+window.showItemDetail = showItemDetail;
 
