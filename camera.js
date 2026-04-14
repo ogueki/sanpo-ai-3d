@@ -990,57 +990,136 @@ async function showItemDetail(itemId) {
       return;
     }
 
-    const rarityColor = {
-      'コモン': 'text-zinc-400 bg-zinc-800',
-      'レア': 'text-blue-400 bg-blue-900/30',
-      'スーパーレア': 'text-purple-400 bg-purple-900/30',
-      'レジェンド': 'text-yellow-400 bg-yellow-900/30'
-    };
-
-    content.innerHTML = `
-      <!-- 名前 & レアリティ -->
-      <div class="flex items-center gap-3 mb-3">
-        <h3 class="text-2xl font-bold flex-1">${item.name}</h3>
-        <span class="px-2 py-1 rounded-lg text-xs font-bold ${rarityColor[item.rarity] || rarityColor['コモン']}">${item.rarity}</span>
-      </div>
-
-      <!-- カテゴリ -->
-      <div class="text-sm text-zinc-500 mb-3">${item.category || 'その他'}</div>
-
-      <!-- 3Dモデル（主役） -->
-      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
-        <div class="text-sm text-zinc-400 mb-2">🧊 3Dモデル</div>
-        ${item.model3d?.status === 'completed' && item.model3d?.glbUrl
-          ? `<model-viewer src="${item.model3d.glbUrl}" auto-rotate camera-controls
-               touch-action="none" interaction-prompt="none"
-               min-camera-orbit="auto 0deg auto" max-camera-orbit="auto 180deg auto"
-               shadow-intensity="1"
-               style="width:100%;height:300px;background:#18181b;border-radius:12px;touch-action:none;overscroll-behavior:contain;">
-             </model-viewer>`
-          : item.model3d?.status === 'processing'
-            ? '<div class="text-center py-8 text-yellow-400">⏳ 3Dモデル生成中...</div>'
-            : '<div class="text-center py-8 text-zinc-600">3Dモデルは未生成です</div>'
-        }
-      </div>
-
-      <!-- 説明 -->
-      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
-        <div class="text-sm text-zinc-300 leading-relaxed">${item.description}</div>
-      </div>
-
-      <!-- 元画像（参考） -->
-      <div class="rounded-xl overflow-hidden mb-4 ring-1 ring-white/10">
-        ${item.image ? `<img src="${item.image}" class="w-full" alt="${item.name}">` : ''}
-      </div>
-
-      <!-- メタ情報 -->
-      <div class="text-xs text-zinc-600">
-        取得日時: ${new Date(item.createdAt).toLocaleString('ja-JP')}
-      </div>
-    `;
+    renderItemDetail(item, false);
   } catch (error) {
     console.error('アイテム詳細エラー:', error);
     content.innerHTML = '<div class="text-center py-8 text-zinc-500">読み込みに失敗しました</div>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// アイテム詳細を描画（editing=trueで名前・説明が編集可に）
+function renderItemDetail(item, editing) {
+  const content = document.getElementById('item-detail-content');
+  if (!content) return;
+
+  const rarityColor = {
+    'コモン': 'text-zinc-400 bg-zinc-800',
+    'レア': 'text-blue-400 bg-blue-900/30',
+    'スーパーレア': 'text-purple-400 bg-purple-900/30',
+    'レジェンド': 'text-yellow-400 bg-yellow-900/30'
+  };
+
+  const model3dBlock = `
+    <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
+      <div class="text-sm text-zinc-400 mb-2">🧊 3Dモデル</div>
+      ${item.model3d?.status === 'completed' && item.model3d?.glbUrl
+        ? `<model-viewer src="${item.model3d.glbUrl}" auto-rotate camera-controls
+             touch-action="none" interaction-prompt="none"
+             min-camera-orbit="auto 0deg auto" max-camera-orbit="auto 180deg auto"
+             shadow-intensity="1"
+             style="width:100%;height:300px;background:#18181b;border-radius:12px;touch-action:none;overscroll-behavior:contain;">
+           </model-viewer>`
+        : item.model3d?.status === 'processing'
+          ? '<div class="text-center py-8 text-yellow-400">⏳ 3Dモデル生成中...</div>'
+          : '<div class="text-center py-8 text-zinc-600">3Dモデルは未生成です</div>'
+      }
+    </div>`;
+
+  const imageBlock = `
+    <div class="rounded-xl overflow-hidden mb-4 ring-1 ring-white/10">
+      ${item.image ? `<img src="${item.image}" class="w-full" alt="${escapeHtml(item.name)}">` : ''}
+    </div>`;
+
+  const metaBlock = `
+    <div class="text-xs text-zinc-600">
+      取得日時: ${new Date(item.createdAt).toLocaleString('ja-JP')}
+    </div>`;
+
+  const header = editing
+    ? `
+      <div class="flex items-center gap-2 mb-3">
+        <input id="edit-name" type="text" maxlength="80" value="${escapeHtml(item.name)}"
+          class="flex-1 bg-zinc-800 ring-1 ring-white/10 rounded-lg px-3 py-2 text-xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <span class="px-2 py-1 rounded-lg text-xs font-bold ${rarityColor[item.rarity] || rarityColor['コモン']}">${escapeHtml(item.rarity)}</span>
+      </div>
+      <div class="text-sm text-zinc-500 mb-3">${escapeHtml(item.category || 'その他')}</div>`
+    : `
+      <div class="flex items-center gap-3 mb-3">
+        <h3 class="text-2xl font-bold flex-1">${escapeHtml(item.name)}</h3>
+        <span class="px-2 py-1 rounded-lg text-xs font-bold ${rarityColor[item.rarity] || rarityColor['コモン']}">${escapeHtml(item.rarity)}</span>
+        <button id="btn-edit-item" class="text-zinc-400 hover:text-white px-2 py-1 rounded-lg ring-1 ring-white/10 text-sm" title="編集">✏️</button>
+      </div>
+      <div class="text-sm text-zinc-500 mb-3">${escapeHtml(item.category || 'その他')}</div>`;
+
+  const descriptionBlock = editing
+    ? `
+      <div class="mb-4">
+        <textarea id="edit-description" maxlength="1000" rows="5"
+          class="w-full bg-zinc-900 ring-1 ring-white/10 rounded-xl p-3 text-sm text-zinc-200 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y">${escapeHtml(item.description || '')}</textarea>
+        <div class="flex gap-2 mt-2 justify-end">
+          <button id="btn-cancel-edit" class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm ring-1 ring-white/10">キャンセル</button>
+          <button id="btn-save-edit" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold">保存</button>
+        </div>
+      </div>`
+    : `
+      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
+        <div class="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">${escapeHtml(item.description || '')}</div>
+      </div>`;
+
+  content.innerHTML = header + model3dBlock + descriptionBlock + imageBlock + metaBlock;
+
+  if (editing) {
+    document.getElementById('btn-cancel-edit')?.addEventListener('click', () => renderItemDetail(item, false));
+    document.getElementById('btn-save-edit')?.addEventListener('click', () => saveItemEdits(item));
+  } else {
+    document.getElementById('btn-edit-item')?.addEventListener('click', () => renderItemDetail(item, true));
+  }
+}
+
+async function saveItemEdits(item) {
+  const nameEl = document.getElementById('edit-name');
+  const descEl = document.getElementById('edit-description');
+  const saveBtn = document.getElementById('btn-save-edit');
+  if (!nameEl || !descEl) return;
+
+  const newName = nameEl.value.trim();
+  const newDesc = descEl.value;
+
+  if (!newName) {
+    showToast('名前は空にできません');
+    return;
+  }
+
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '保存中...'; }
+
+  try {
+    const response = await fetch(API_URL_COLLECTION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: SESSION_ID,
+        action: 'update',
+        itemId: item.id,
+        name: newName,
+        description: newDesc
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || '更新に失敗しました');
+
+    showToast('✅ 保存しました');
+    renderItemDetail(data.item, false);
+    loadCollection(); // グリッドも最新化
+  } catch (err) {
+    console.error('アイテム更新エラー:', err);
+    showToast(err.message || '保存に失敗しました');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '保存'; }
   }
 }
 

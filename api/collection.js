@@ -1,6 +1,6 @@
 // api/collection.js - コレクション管理API
 import OpenAI from 'openai';
-import { getCollection, addToCollection, getCollectionItem } from '../sessions/store.js';
+import { getCollection, addToCollection, getCollectionItem, updateCollectionItem } from '../sessions/store.js';
 import { supabase, BUCKETS } from '../lib/supabase.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -53,6 +53,27 @@ export default async (req, res) => {
       const item = await getCollectionItem(sessionId, itemId);
       if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
       return res.json({ success: true, item });
+    }
+
+    if (action === 'update' && itemId) {
+      const { name, description } = req.body;
+      const updates = {};
+      if (typeof name === 'string') {
+        const trimmed = name.trim();
+        if (!trimmed) return res.status(400).json({ error: '名前は空にできません' });
+        if (trimmed.length > 80) return res.status(400).json({ error: '名前が長すぎます（80文字以内）' });
+        updates.name = trimmed;
+      }
+      if (typeof description === 'string') {
+        if (description.length > 1000) return res.status(400).json({ error: '説明が長すぎます（1000文字以内）' });
+        updates.description = description;
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: '更新内容がありません' });
+      }
+      const updated = await updateCollectionItem(sessionId, itemId, updates);
+      if (!updated) return res.status(404).json({ error: 'アイテムが見つかりません' });
+      return res.json({ success: true, item: updated });
     }
 
     if (!image) {

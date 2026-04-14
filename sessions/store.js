@@ -129,6 +129,8 @@ export const updateCollectionItem = async (sessionId, itemId, updates) => {
     if (updates.model3d.glbUrl !== undefined) dbUpdates.glb_url = updates.model3d.glbUrl;
   }
   if (updates.image_url !== undefined) dbUpdates.image_url = updates.image_url;
+  if (updates.name !== undefined) dbUpdates.name = updates.name;
+  if (updates.description !== undefined) dbUpdates.description = updates.description;
 
   const { data, error } = await supabase
     .from('collections')
