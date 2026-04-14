@@ -312,6 +312,45 @@ async function sendToUnifiedAI(text, newImage = null) {
   }
 }
 
+// 端末の画面向きを考慮してvideoフレームをcanvasにキャプチャし、Blobを返す共通処理
+// landscape時は canvas を90°/180°/-90°回転させ、3D生成やAI認識で被写体が寝ないようにする
+async function captureVideoFrame(scale = 0.7, quality = 0.85) {
+  if (!video || !canvas) throw new Error('video/canvas要素が見つかりません');
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const rawAngle = (screen.orientation && typeof screen.orientation.angle === 'number')
+    ? screen.orientation.angle
+    : (typeof window.orientation === 'number' ? window.orientation : 0);
+  // -90 → 270 に正規化
+  const angle = ((rawAngle % 360) + 360) % 360;
+
+  const ctx = canvas.getContext('2d');
+  const sw = vw * scale;
+  const sh = vh * scale;
+
+  if (angle === 90 || angle === 270) {
+    // 縦横入れ替え
+    canvas.width = sh;
+    canvas.height = sw;
+  } else {
+    canvas.width = sw;
+    canvas.height = sh;
+  }
+
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  if (angle === 90) ctx.rotate(-Math.PI / 2);
+  else if (angle === 270) ctx.rotate(Math.PI / 2);
+  else if (angle === 180) ctx.rotate(Math.PI);
+  ctx.drawImage(video, -sw / 2, -sh / 2, sw, sh);
+  ctx.restore();
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+  if (!blob) throw new Error('画像の生成に失敗しました');
+  return blob;
+}
+
 async function captureAndSendToAI(extraText = '') {
   if (!video) {
     showToast('video要素が見つかりません');
@@ -329,23 +368,7 @@ async function captureAndSendToAI(extraText = '') {
   }
 
   try {
-    if (!canvas) {
-      throw new Error('canvas要素が見つかりません');
-    }
-
-    // 画像をキャプチャ
-    const SCALE = 0.7; // 画像サイズの調整
-    canvas.width = video.videoWidth * SCALE;
-    canvas.height = video.videoHeight * SCALE;
-
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-    if (!blob) {
-      throw new Error('画像の生成に失敗しました');
-    }
-
+    const blob = await captureVideoFrame();
     const base64Image = await blobToBase64(blob);
 
     const questionText = extraText || '写真を送信しました。何が見えますか？';
@@ -719,18 +742,7 @@ async function scanAndCollect() {
   try {
     scanProcessing = true;
 
-    if (!canvas) throw new Error('canvas要素が見つかりません');
-
-    // 画像をキャプチャ
-    const SCALE = 0.7;
-    canvas.width = video.videoWidth * SCALE;
-    canvas.height = video.videoHeight * SCALE;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-    if (!blob) throw new Error('画像の生成に失敗しました');
-
+    const blob = await captureVideoFrame();
     const base64Image = await blobToBase64(blob);
 
     // フラッシュ効果
