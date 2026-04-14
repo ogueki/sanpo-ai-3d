@@ -1010,8 +1010,10 @@ async function showItemDetail(itemId) {
         <div class="text-sm text-zinc-400 mb-2">🧊 3Dモデル</div>
         ${item.model3d?.status === 'completed' && item.model3d?.glbUrl
           ? `<model-viewer src="${item.model3d.glbUrl}" auto-rotate camera-controls
-               touch-action="pan-y" shadow-intensity="1"
-               style="width:100%;height:300px;background:#18181b;border-radius:12px;">
+               touch-action="none" interaction-prompt="none"
+               min-camera-orbit="auto 0deg auto" max-camera-orbit="auto 180deg auto"
+               shadow-intensity="1"
+               style="width:100%;height:300px;background:#18181b;border-radius:12px;touch-action:none;overscroll-behavior:contain;">
              </model-viewer>`
           : item.model3d?.status === 'processing'
             ? '<div class="text-center py-8 text-yellow-400">⏳ 3Dモデル生成中...</div>'
