@@ -998,11 +998,6 @@ async function showItemDetail(itemId) {
     };
 
     content.innerHTML = `
-      <!-- 画像 -->
-      <div class="rounded-xl overflow-hidden mb-4 ring-1 ring-white/10">
-        ${item.image ? `<img src="${item.image}" class="w-full" alt="${item.name}">` : ''}
-      </div>
-
       <!-- 名前 & レアリティ -->
       <div class="flex items-center gap-3 mb-3">
         <h3 class="text-2xl font-bold flex-1">${item.name}</h3>
@@ -1012,12 +1007,7 @@ async function showItemDetail(itemId) {
       <!-- カテゴリ -->
       <div class="text-sm text-zinc-500 mb-3">${item.category || 'その他'}</div>
 
-      <!-- 説明 -->
-      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
-        <div class="text-sm text-zinc-300 leading-relaxed">${item.description}</div>
-      </div>
-
-      <!-- 3Dモデル -->
+      <!-- 3Dモデル（主役） -->
       <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
         <div class="text-sm text-zinc-400 mb-2">🧊 3Dモデル</div>
         ${item.model3d?.status === 'completed' && item.model3d?.glbUrl
@@ -1031,6 +1021,16 @@ async function showItemDetail(itemId) {
             ? '<div class="text-center py-8 text-yellow-400">⏳ 3Dモデル生成中...</div>'
             : '<div class="text-center py-8 text-zinc-600">3Dモデルは未生成です</div>'
         }
+      </div>
+
+      <!-- 説明 -->
+      <div class="rounded-xl bg-zinc-900 ring-1 ring-white/10 p-3 mb-4">
+        <div class="text-sm text-zinc-300 leading-relaxed">${item.description}</div>
+      </div>
+
+      <!-- 元画像（参考） -->
+      <div class="rounded-xl overflow-hidden mb-4 ring-1 ring-white/10">
+        ${item.image ? `<img src="${item.image}" class="w-full" alt="${item.name}">` : ''}
       </div>
 
       <!-- メタ情報 -->
