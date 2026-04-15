@@ -1,6 +1,6 @@
 // api/collection.js - コレクション管理API
 import OpenAI from 'openai';
-import { getCollection, addToCollection, getCollectionItem, updateCollectionItem } from '../sessions/store.js';
+import { getCollection, addToCollection, getCollectionItem, updateCollectionItem, deleteCollectionItem } from '../sessions/store.js';
 import { supabase, BUCKETS } from '../lib/supabase.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -53,6 +53,13 @@ export default async (req, res) => {
       const item = await getCollectionItem(sessionId, itemId);
       if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
       return res.json({ success: true, item });
+    }
+
+    if (action === 'delete' && itemId) {
+      const deleted = await deleteCollectionItem(sessionId, itemId);
+      if (!deleted) return res.status(404).json({ error: 'アイテムが見つかりません' });
+      console.log(`🗑️ [Collection] "${deleted.name}" を削除`);
+      return res.json({ success: true });
     }
 
     if (action === 'update' && itemId) {

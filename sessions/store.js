@@ -120,6 +120,24 @@ export const getCollectionItem = async (sessionId, itemId) => {
   return rowToItem(data);
 };
 
+export const deleteCollectionItem = async (sessionId, itemId) => {
+  const { data, error } = await supabase
+    .from('collections')
+    .delete()
+    .eq('session_id', sessionId)
+    .eq('id', itemId)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    console.error('❌ [Store] deleteCollectionItem error:', error);
+    throw error;
+  }
+  if (!data) return null;
+  console.log(`🗑️ [Store] コレクション削除: ${itemId}`);
+  return rowToItem(data);
+};
+
 export const updateCollectionItem = async (sessionId, itemId, updates) => {
   // 旧API互換: { model3d: { status, taskId, glbUrl } } を受け取る
   const dbUpdates = {};

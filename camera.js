@@ -850,12 +850,20 @@ async function start3DGeneration(itemId) {
   }
 }
 
+// 削除済みアイテム用のポーリング中断フラグ
+const canceledPolls = new Set();
+
 // 3D生成の状態をポーリング
 async function poll3DStatus(itemId) {
   const maxAttempts = 60; // 最大5分（5秒×60回）
   let attempts = 0;
 
   const check = async () => {
+    if (canceledPolls.has(itemId)) {
+      canceledPolls.delete(itemId);
+      console.log(`⏹️ 3D生成ポーリング中断: ${itemId}`);
+      return;
+    }
     if (attempts++ >= maxAttempts) {
       console.warn('3D生成: タイムアウト');
       return;
@@ -1054,6 +1062,7 @@ function renderItemDetail(item, editing) {
         <h3 class="text-2xl font-bold flex-1">${escapeHtml(item.name)}</h3>
         <span class="px-2 py-1 rounded-lg text-xs font-bold ${rarityColor[item.rarity] || rarityColor['コモン']}">${escapeHtml(item.rarity)}</span>
         <button id="btn-edit-item" class="text-zinc-400 hover:text-white px-2 py-1 rounded-lg ring-1 ring-white/10 text-sm" title="編集">✏️</button>
+        <button id="btn-delete-item" class="text-red-400 hover:text-red-300 px-2 py-1 rounded-lg ring-1 ring-red-500/30 text-sm" title="削除">🗑️</button>
       </div>
       <div class="text-sm text-zinc-500 mb-3">${escapeHtml(item.category || 'その他')}</div>`;
 
@@ -1079,7 +1088,56 @@ function renderItemDetail(item, editing) {
     document.getElementById('btn-save-edit')?.addEventListener('click', () => saveItemEdits(item));
   } else {
     document.getElementById('btn-edit-item')?.addEventListener('click', () => renderItemDetail(item, true));
+    document.getElementById('btn-delete-item')?.addEventListener('click', () => confirmDeleteItem(item));
   }
+}
+
+// 削除確認ダイアログ
+function confirmDeleteItem(item) {
+  if (document.getElementById('delete-confirm-modal')) return;
+
+  const modal = document.createElement('div');
+  modal.id = 'delete-confirm-modal';
+  modal.className = 'fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-6';
+  modal.innerHTML = `
+    <div class="bg-zinc-900 ring-1 ring-white/10 rounded-2xl p-5 w-full max-w-sm">
+      <div class="text-base font-bold text-white mb-2">このアイテムを削除しますか？</div>
+      <div class="text-sm text-zinc-400 mb-5 break-all">「${escapeHtml(item.name)}」は復元できません。</div>
+      <div class="flex gap-2 justify-end">
+        <button id="btn-delete-cancel" class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm ring-1 ring-white/10">キャンセル</button>
+        <button id="btn-delete-ok" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-bold">削除する</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.getElementById('btn-delete-cancel').addEventListener('click', close);
+  document.getElementById('btn-delete-ok').addEventListener('click', async () => {
+    const okBtn = document.getElementById('btn-delete-ok');
+    okBtn.disabled = true;
+    okBtn.textContent = '削除中...';
+    try {
+      const response = await fetch(API_URL_COLLECTION, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: SESSION_ID, action: 'delete', itemId: item.id })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '削除に失敗しました');
+
+      canceledPolls.add(item.id);
+      close();
+      if (window.closeItemDetail) window.closeItemDetail();
+      showToast('🗑️ 削除しました');
+      loadCollection();
+    } catch (err) {
+      console.error('アイテム削除エラー:', err);
+      showToast(err.message || '削除に失敗しました');
+      okBtn.disabled = false;
+      okBtn.textContent = '削除する';
+    }
+  });
 }
 
 async function saveItemEdits(item) {
