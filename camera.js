@@ -852,19 +852,27 @@ async function start3DGeneration(itemId) {
 
 // 削除済みアイテム用のポーリング中断フラグ
 const canceledPolls = new Set();
+// ポーリング中のアイテムID（重複起動防止）
+const activePolls = new Set();
 
 // 3D生成の状態をポーリング
-async function poll3DStatus(itemId) {
+// immediate=true なら初回チェックを即時実行（loadCollection からの再開用）
+async function poll3DStatus(itemId, immediate = false) {
+  if (activePolls.has(itemId)) return; // 既に走ってる
+  activePolls.add(itemId);
+
   const maxAttempts = 60; // 最大5分（5秒×60回）
   let attempts = 0;
 
   const check = async () => {
     if (canceledPolls.has(itemId)) {
       canceledPolls.delete(itemId);
+      activePolls.delete(itemId);
       console.log(`⏹️ 3D生成ポーリング中断: ${itemId}`);
       return;
     }
     if (attempts++ >= maxAttempts) {
+      activePolls.delete(itemId);
       console.warn('3D生成: タイムアウト');
       return;
     }
@@ -883,12 +891,19 @@ async function poll3DStatus(itemId) {
       const data = await response.json();
 
       if (data.status === 'completed') {
+        activePolls.delete(itemId);
         console.log('✅ 3D生成完了!');
         showToast('3Dモデルが完成しました！');
+        // コレクション画面が開いていれば再描画
+        const overlay = document.getElementById('collection-overlay');
+        if (overlay && overlay.style.opacity === '1') {
+          loadCollection();
+        }
         return;
       }
 
       if (data.status === 'failed') {
+        activePolls.delete(itemId);
         console.warn('3D生成失敗');
         return;
       }
@@ -900,8 +915,12 @@ async function poll3DStatus(itemId) {
     }
   };
 
-  // 10秒後から開始
-  setTimeout(check, 10000);
+  if (immediate) {
+    check();
+  } else {
+    // 10秒後から開始（生成直後は最低でも10秒待つ）
+    setTimeout(check, 10000);
+  }
 }
 
 // コレクション読み込み・表示
@@ -925,6 +944,13 @@ async function loadCollection() {
 
     empty.style.display = 'none';
     stats.textContent = `${items.length} アイテム収集済み`;
+
+    // リロード等でポーリングが途切れた processing アイテムを再開
+    items.forEach(item => {
+      if (item.model3d?.status === 'processing') {
+        poll3DStatus(item.id, true);
+      }
+    });
 
     grid.innerHTML = items.map(item => {
       const has3D = item.model3d?.status === 'completed' && item.model3d?.glbUrl;
